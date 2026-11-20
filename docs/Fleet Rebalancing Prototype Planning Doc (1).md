@@ -205,7 +205,7 @@ One seeded dataset with five branches, plus small variants that each force a spe
 | Portland | Pricing wins because hauling back is expensive |
 | Hartford reports a missing booking | A branch correction changes the plan |
 | High move cost variant | No intervention is worthwhile, and the tool recommends none |
-| Joint equals one lever | A variant where joint matches moves only, so joint is not always shown winning |
+| Pricing adds nothing | A variant where pricing is unattractive, so the tool recommends moves and leaves prices alone: using both levers earns no more than moves on their own |
 
 **Generated fields**
 
