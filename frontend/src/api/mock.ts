@@ -130,7 +130,7 @@ const LANES: Lane[] = BRANCHES.flatMap((a) =>
 const CASES: (CaseInfo & { moveMult: number; pricing: boolean })[] = [
   { id: "default", label: "Default network", description: "Hartford to New Haven is fixed by a short staff drive; Portland is fixed by pricing because hauling back is expensive.", moveMult: 1, pricing: true },
   { id: "high_move_cost", label: "High move cost", description: "Every intervention costs more than it creates, so the plan has no actions.", moveMult: 8, pricing: false },
-  { id: "joint_equals_moves", label: "Joint equals moves only", description: "Pricing has nothing to add, so the joint plan matches moves only.", moveMult: 1, pricing: false },
+  { id: "joint_equals_moves", label: "Pricing adds nothing", description: "Pricing is made unattractive, so the tool recommends moving trucks and leaves prices alone: using both levers earns no more than moves on their own.", moveMult: 1, pricing: false },
 ];
 
 function caseOf(id: string) {
@@ -277,8 +277,8 @@ function moveEffect(need: Need, src: Need["sources"][number], count: number, use
     label: `Drive ${trucks} ${o} → ${d}`,
     why:
       useful > 0
-        ? `Drive ${trucks} ${o} to ${d} on ${dayName(need.dispatch)}: ${count === 1 ? "it arrives" : "they arrive"} ${dayName(arrival)}, in time for ${dayName(need.shortageDays[0])}'s shortage (about ${Math.round(gained)} rentals ${d} would otherwise turn away), and a hauler would arrive ${dayName(need.dispatch + p.hauler_transit_days)}, too late.`
-        : `Drive ${trucks} ${o} to ${d} on ${dayName(need.dispatch)}: ${d}'s shortage is already covered, so ${count === 1 ? "this truck adds" : "these trucks add"} no rentals there.`,
+        ? `Arrives ${dayName(arrival)}, in time for ${dayName(need.shortageDays[0])}'s shortage (about ${Math.round(gained)} rentals ${d} would otherwise turn away), and a hauler would arrive ${dayName(need.dispatch + p.hauler_transit_days)}, too late.`
+        : `${d}'s shortage is already covered, so ${count === 1 ? "this truck adds" : "these trucks add"} no rentals there.`,
     affected_branches: [src.origin, need.dest],
     cost,
     origin: src.origin,
@@ -353,8 +353,8 @@ function rateLever(branch: string, clsId: string, demandDays: number, capDays: n
         label: `${t < 0 ? "Discount" : "Raise"} ${cls.short_name} rates at ${name} by ${pct}%`,
         why:
           t < 0
-            ? `Discount ${cls.name}s at ${name} by ${pct}%: local demand there is price-sensitive and the trucks sit idle, so about ${Math.max(1, Math.round(dDays / p.local_duration_days))} more rentals go out, while hauling a truck back to New York would cost ${usd0(haul)}.`
-            : `Raise ${cls.name} rates at ${name} by ${pct}%: every ${cls.short_name} there is already rented and about ${turnedAway} rentals are being turned away, so the higher rate earns more on the same trucks.`,
+            ? `Local demand there is price-sensitive and the trucks sit idle, so about ${Math.max(1, Math.round(dDays / p.local_duration_days))} more rentals go out, while hauling a truck back to New York would cost ${usd0(haul)}.`
+            : `Every ${cls.short_name} there is already rented and about ${turnedAway} rentals are being turned away, so the higher rate earns more on the same trucks.`,
         affected_branches: [branch],
         cost: 0,
         branch_id: branch,
@@ -398,7 +398,7 @@ const FEE_PWM: Lever = {
       id: "fee:PWM",
       type: "fee",
       label: `Add a $${fee} drop fee into Portland`,
-      why: `Add a $${fee} drop fee on new one-way rentals into Portland: about ${Math.round(d * 100)}% are put off, ${Math.round(p.fee_divert_share * 100)}% of those drop at Boston instead, and fewer trucks pile up where local demand is low.`,
+      why: `About ${Math.round(d * 100)}% of new one-way rentals into Portland are put off, ${Math.round(p.fee_divert_share * 100)}% of those drop at Boston instead, and fewer trucks pile up where local demand is low.`,
       affected_branches: ["PWM", "BOS", "NYC"],
       cost: 0,
       branch_id: "PWM",
@@ -444,8 +444,8 @@ const INCENTIVE_NHV: Lever = {
       type: "incentive",
       label: `Offer $${amount} to return at New Haven instead of Hartford`,
       why: hfdNeedsThem
-        ? `Offer $${amount} to customers due back at Hartford who return to New Haven instead: Hartford now needs those trucks for its own booking, so this pulls them the wrong way.`
-        : `Offer $${amount} to customers due back at Hartford who return to New Haven instead: about ${n} of ${eligible} are likely to accept, which puts trucks where Thursday's and Friday's demand is without a drive.`,
+        ? `Hartford now needs those trucks for its own booking, so this pulls them the wrong way.`
+        : `About ${n} of the ${eligible} customers due back at Hartford are likely to accept, which puts trucks where Thursday's and Friday's demand is without a drive.`,
       affected_branches: ["NHV", "HFD"],
       cost: r2(comp.incentive_payments),
       branch_id: "NHV",
@@ -682,7 +682,7 @@ function basePosition(b: string, c: string, day: number): [number, number] {
   }
 }
 
-function inventory(ctx: Ctx, effects: Effect[]): InventoryRow[] {
+function inventory(ctx: Ctx, effects: Effect[], approvedEffects: Effect[]): InventoryRow[] {
   const rows: InventoryRow[] = [];
   const p = ctx.p;
   for (const b of BRANCHES) {
@@ -693,18 +693,21 @@ function inventory(ctx: Ctx, effects: Effect[]): InventoryRow[] {
         for (const bk of ctx.added) {
           if (bk.branch_id === b.id && bk.class_id === c.id && day >= bk.start_day && day < bk.start_day + bk.duration_days) idleNone = Math.max(0, idleNone - bk.count);
         }
-        let idlePlan = idleNone;
-        let unmetPlan = unmetNone;
-        for (const e of effects) {
-          for (const a of e.inv) {
-            if (a.b !== b.id || a.c !== c.id || !a.on(day)) continue;
-            if (a.unmetScale !== undefined) unmetPlan *= a.unmetScale;
-            unmetPlan += a.unmet ?? 0;
-            idlePlan += a.idle ?? 0;
+        const under = (list: Effect[]): [number, number] => {
+          let idle = idleNone;
+          let unmet = unmetNone;
+          for (const e of list) {
+            for (const a of e.inv) {
+              if (a.b !== b.id || a.c !== c.id || !a.on(day)) continue;
+              if (a.unmetScale !== undefined) unmet *= a.unmetScale;
+              unmet += a.unmet ?? 0;
+              idle += a.idle ?? 0;
+            }
           }
-        }
-        idlePlan = Math.max(0, idlePlan);
-        unmetPlan = Math.max(0, r2(unmetPlan));
+          return [Math.max(0, idle), Math.max(0, r2(unmet))];
+        };
+        const [idlePlan, unmetPlan] = under(effects);
+        const [idleApproved, unmetApproved] = under(approvedEffects);
         const revDays = Math.min(p.local_duration_days, p.horizon_days - day + 1);
         rows.push({
           branch_id: b.id,
@@ -712,12 +715,16 @@ function inventory(ctx: Ctx, effects: Effect[]): InventoryRow[] {
           day,
           available_none: idleNone + 1,
           available_plan: idlePlan + 1,
+          available_approved: idleApproved + 1,
           unmet_none: unmetNone,
           unmet_plan: unmetPlan,
+          unmet_approved: unmetApproved,
           unmet_revenue_none: r2(unmetNone * revDays * c.daily_rate),
           unmet_revenue_plan: r2(unmetPlan * revDays * c.daily_rate),
+          unmet_revenue_approved: r2(unmetApproved * revDays * c.daily_rate),
           idle_none: idleNone,
           idle_plan: idlePlan,
+          idle_approved: idleApproved,
         });
       }
     }
@@ -725,7 +732,7 @@ function inventory(ctx: Ctx, effects: Effect[]): InventoryRow[] {
   return rows;
 }
 
-function totals(rows: InventoryRow[], which: "none" | "plan"): SituationTotals {
+function totals(rows: InventoryRow[], which: "none" | "plan" | "approved"): SituationTotals {
   return {
     unserved_rentals: r2(rows.reduce((s, r) => s + r[`unmet_${which}`], 0)),
     unserved_revenue: r2(rows.reduce((s, r) => s + r[`unmet_revenue_${which}`], 0)),
@@ -754,7 +761,8 @@ function solveInternal(ctx: Ctx): Solved {
   // The current plan: joint under the decisions sent.
   const effects = chooseEffects(ctx);
   const current = strategy("joint", base, effects, ctx.p, "Current plan");
-  const approvedOnly = strategy("joint", base, chooseEffects(ctx, true), ctx.p);
+  const approvedEffects = chooseEffects(ctx, true);
+  const approvedOnly = strategy("joint", base, approvedEffects, ctx.p);
 
   const sign: Record<BridgeKey, number> = { rental_revenue: 1, fee_revenue: 1, variable_cost: -1, incentive_payments: -1, transport_cost: -1, change_cost: -1 };
   const steps = COMP_KEYS.map((key) => ({ key, label: BRIDGE_LABEL[key], delta: r2(sign[key] * (current.components[key] - none.components[key])) }));
@@ -765,7 +773,7 @@ function solveInternal(ctx: Ctx): Solved {
   const { cards, transit } = scorecards(base, effects, ctx.p);
   const credits: Record<string, number> = {};
   for (const c of cards) if (c.adjusted.credit > 0) credits[c.branch_id] = c.adjusted.credit;
-  const inv = inventory(ctx, effects);
+  const inv = inventory(ctx, effects, approvedEffects);
   const key = hash(JSON.stringify([ctx.caseId, ctx.p, ctx.added, [...ctx.approved.values()], [...ctx.rejected], ctx.forbid ?? null]));
 
   const response: SolveResponse = {
@@ -794,7 +802,7 @@ function solveInternal(ctx: Ctx): Solved {
       approved_count: ctx.approved.size,
       rejected_action_ids: [...ctx.rejected],
     },
-    situation: { do_nothing: totals(inv, "none"), plan: totals(inv, "plan") },
+    situation: { do_nothing: totals(inv, "none"), plan: totals(inv, "plan"), approved: totals(inv, "approved") },
     bridge: { start: none.expected_contribution, steps, end: current.expected_contribution },
     downside: current.by_scenario.map((s, i) => ({ scenario_id: s.scenario_id, label: s.label, weight: s.weight, plan: s.contribution, do_nothing: none.by_scenario[i].contribution })),
     scorecards: cards,

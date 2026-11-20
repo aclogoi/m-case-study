@@ -47,8 +47,8 @@ Everything below is invented beyond the prompt and belongs in the write-up. All 
 
 **Demand and bookings**
 
-10. Demand comes in two kinds. Confirmed bookings have fixed prices and must be served. New demand is a forecast that responds to price.
-11. An unserved confirmed booking is reported as a broken commitment and carries a $1,000 penalty, so the solver breaks one only when no plan can cover it.
+10. Demand comes in two kinds. Confirmed bookings have fixed prices and carry a penalty if unserved. New demand is a forecast that responds to price.
+11. An unserved confirmed booking is reported as a broken commitment and carries a $1,000 penalty, which discourages breaking it. A sufficiently large contribution gain can outweigh the penalty.
 12. New demand has three scenarios (low, base, high at 80%, 100% and 120% of forecast, weighted 25/50/25). The plan is fixed across scenarios; rentals served adapt to what shows up.
 
 **Levers**

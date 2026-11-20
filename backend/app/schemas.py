@@ -377,12 +377,16 @@ class InventoryRow(BaseModel):
     day: int
     available_none: float  # start-of-day availability under do nothing
     available_plan: float
+    available_approved: float  # exactly the approved actions and nothing else
     unmet_none: float  # new demand at the chosen tier that went unserved, by start day
     unmet_plan: float
+    unmet_approved: float
     unmet_revenue_none: float  # in-horizon rental revenue those unserved rentals would have earned
     unmet_revenue_plan: float
+    unmet_revenue_approved: float
     idle_none: float  # trucks still on the lot after the day's rentals and dispatches left
     idle_plan: float
+    idle_approved: float
 
 
 class SituationTotals(BaseModel):
@@ -396,6 +400,7 @@ class SituationTotals(BaseModel):
 class Situation(BaseModel):
     do_nothing: SituationTotals
     plan: SituationTotals  # the current plan
+    approved: SituationTotals  # exactly the approved actions; equals do_nothing when none
 
 
 class DecisionSummary(BaseModel):

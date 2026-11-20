@@ -1,5 +1,5 @@
 import type { Action } from "../api/types";
-import { costParts, quantityText, refusalEffect } from "../lib/actions";
+import { costParts, dueOrder, isCloseCall, quantityText, refusalEffect, sameLane } from "../lib/actions";
 import { diffPlans } from "../lib/diff";
 import { usd } from "../lib/format";
 import { tallyOf } from "../lib/tally";
@@ -79,22 +79,60 @@ export function DecisionButtons({ action, state }: { action: Action; state: Card
   );
 }
 
-function DecisionCard({ action, state }: { action: Action; state: CardState }) {
-  const { result, openAction } = useStore();
+/**
+ * A rejection closes the whole lane, so two recommended moves on one lane stand or fall
+ * together. Said on the card, not left to a tooltip on the Reject button.
+ */
+function LaneNote({ action }: { action: Action }) {
+  const L = useLookups();
+  const { actions, approvedIds } = useDecisions();
+  const onLane = useApprovedOnLane(action);
+  if (action.type !== "move") return null;
+  const waiting = actions.filter((a) => a.id !== action.id && sameLane(a, action) && !approvedIds.has(a.id) && a.decision !== "approved");
+  if (waiting.length === 0 && onLane === 0) return null;
+  const lane = `${L.branchName(action.origin)} to ${L.branchName(action.dest)}`;
+  return (
+    <p className="lane-note">
+      <strong>Shares the {lane} lane.</strong>{" "}
+      {waiting.length > 0
+        ? `Rejecting this closes the lane for ${L.className(action.class_id, 2)}, which also drops the ${waiting.length === 1 ? "move" : `${waiting.length} moves`} leaving ${waiting.map((a) => L.date(a.dispatch_day ?? 1)).join(" and ")}. The cost of refusing is for the whole lane, so it is the same on each of these cards.`
+        : refusalEffect(action, L.branchName, L.className, onLane)}
+    </p>
+  );
+}
+
+function DecisionCard({ action, state, showDue }: { action: Action; state: CardState; showDue?: boolean }) {
+  const { result, openAction, values } = useStore();
   const L = useLookups();
   const onLane = useApprovedOnLane(action);
   const cost = costParts(action, result?.params.change_cost ?? 0);
   const isMove = action.type === "move";
+  const reduction = values[action.id]?.reduction;
+  const close = state === "pending" && reduction !== undefined && isCloseCall(reduction, cost.total);
   return (
     <article className={`dcard dcard-${state}`}>
       <div className="dcard-main">
-        <h3>{action.label}</h3>
+        <h3>
+          {action.label}
+          {close && (
+            <span className="pill pill-close" title={`Refusing this would lose ${usd(reduction ?? 0)}, against ${usd(cost.total)} to carry it out. Little rides on it either way.`}>
+              Close call
+            </span>
+          )}
+        </h3>
         {isMove && (
           <div className="dcard-when">
             Leaves {L.longDate(action.dispatch_day ?? 1)} · on the lot at {L.branchName(action.dest)} from {L.longDate(action.arrival_day ?? 1)} · {action.mode === "hauler" ? "hauler" : "staff drive"}
           </div>
         )}
+        {!isMove && showDue && <div className="dcard-when">Pricing change · effective today, {L.longDate(1)}</div>}
         <p className="dcard-why">{action.why}</p>
+        {state === "pending" && <LaneNote action={action} />}
+        {close && (
+          <p className="fine">
+            Close call: it costs {usd(cost.total)} to carry out and refusing it would lose only {usd(reduction ?? 0)}.
+          </p>
+        )}
         {state === "rejected" && <p className="fine">{refusalEffect(action, L.branchName, L.className, onLane).replace(/^Rejecting/, "Rejecting this")}</p>}
         {state === "missing" && (
           <p className="note">You approved this, but the latest plan did not return it. It is kept as approved here; undo it if it no longer applies.</p>
@@ -145,7 +183,7 @@ function ChangeNotice() {
   );
   const isReject = change.kind === "rejected";
   return (
-    <div className={`notice ${isReject ? "notice-reject" : "notice-restore"}`} role="status">
+    <div className={`notice notice-sticky ${isReject ? "notice-reject" : "notice-restore"}`} role="status">
       <div className="notice-head">
         <div>
           <div className="notice-title">
@@ -154,11 +192,11 @@ function ChangeNotice() {
           <p>
             {isReject
               ? cost > 0.5
-                ? `Refusing it costs ${usd(cost)} over the 14 days: the current plan is now worth ${usd(result.decision.current_plan)}, down from ${usd(change.before.decision.current_plan)}.`
+                ? `Refusing it costs ${usd(cost)} over the 14 days: the recommended plan is now worth ${usd(result.decision.current_plan)}, down from ${usd(change.before.decision.current_plan)}.`
                 : cost < -0.5
                   ? `Refusing it leaves the plan ${usd(-cost)} better off: ${usd(result.decision.current_plan)}, up from ${usd(change.before.decision.current_plan)}.`
                   : `Refusing it costs nothing: the tool found an equally good plan without it (${usd(result.decision.current_plan)}).`
-              : `It is back in play. The current plan is now worth ${usd(result.decision.current_plan)} (${cost < -0.5 ? `up ${usd(-cost)}` : cost > 0.5 ? `down ${usd(cost)}` : "unchanged"}).`}
+              : `It is back in play. The recommended plan is now worth ${usd(result.decision.current_plan)} (${cost < -0.5 ? `up ${usd(-cost)}` : cost > 0.5 ? `down ${usd(cost)}` : "unchanged"}).`}
           </p>
         </div>
         <div className="notice-buttons">
@@ -189,7 +227,7 @@ function ChangeNotice() {
 }
 
 export function DecisionQueue() {
-  const { result, rejected, approve, solving, setView, setEvidenceOpen } = useStore();
+  const { result, rejected, approve, solving, setView, setEvidenceOpen, queueSort, setQueueSort, values } = useStore();
   const L = useLookups();
   const { actions, approvedIds, pendingActions, missing, counts } = useDecisions();
   if (!result) return null;
@@ -204,6 +242,9 @@ export function DecisionQueue() {
     const w = waiting(list);
     return w === 0 ? "all decided" : `${w} waiting`;
   };
+  // Largest cost of refusing first; an action whose figure has not arrived yet keeps its due order, at the end.
+  const worth = (a: Action) => values[a.id]?.reduction ?? Number.NEGATIVE_INFINITY;
+  const byValue = [...dueOrder(actions)].sort((a, b) => worth(b) - worth(a));
 
   return (
     <div className="view">
@@ -211,15 +252,27 @@ export function DecisionQueue() {
         <div>
           <h1>Decisions</h1>
           <p className="why">
-            What the tool recommends, in the order the decisions fall due: pricing changes take effect today, then moves by dispatch day. Each card shows what the action costs to carry out and what refusing it would cost.
+            What the tool recommends
+            {queueSort === "due"
+              ? ", in the order the decisions fall due: pricing changes take effect today, then moves by dispatch day."
+              : ", with the most at stake first: the actions that would cost the most to refuse."}{" "}
+            Each card shows what the action costs to carry out and what refusing it would cost.
             The plan is rebuilt after every approval or rejection, so the remaining recommendations can change.
           </p>
         </div>
-        {pendingActions.length > 0 && (
-          <button type="button" className="btn" onClick={() => approve(pendingActions)} disabled={solving}>
-            Approve all remaining ({pendingActions.length})
-          </button>
-        )}
+        <div className="queue-tools">
+          {actions.length > 1 && (
+            <div className="seg" role="group" aria-label="Order of the decisions">
+              <button type="button" className={queueSort === "due" ? "on" : ""} aria-pressed={queueSort === "due"} onClick={() => setQueueSort("due")}>By due date</button>
+              <button type="button" className={queueSort === "value" ? "on" : ""} aria-pressed={queueSort === "value"} onClick={() => setQueueSort("value")}>By value at stake</button>
+            </div>
+          )}
+          {pendingActions.length > 0 && (
+            <button type="button" className="btn" onClick={() => approve(pendingActions)} disabled={solving}>
+              Approve all remaining ({pendingActions.length})
+            </button>
+          )}
+        </div>
       </div>
 
       <ChangeNotice />
@@ -244,7 +297,19 @@ export function DecisionQueue() {
         </p>
       )}
 
-      {pricing.length > 0 && (
+      {queueSort === "value" && actions.length > 0 && (
+        <section className="queue-group">
+          <header>
+            <h2>Most at stake first</h2>
+            <span className="group-note">{actions.length} {actions.length === 1 ? "recommendation" : "recommendations"} · {groupNote(actions)}</span>
+          </header>
+          {byValue.map((a) => (
+            <DecisionCard key={a.id} action={a} state={stateOf(a)} showDue />
+          ))}
+        </section>
+      )}
+
+      {queueSort === "due" && pricing.length > 0 && (
         <section className="queue-group">
           <header>
             <h2>Pricing changes — effective today, {L.longDate(1)}</h2>
@@ -256,7 +321,7 @@ export function DecisionQueue() {
         </section>
       )}
 
-      {dispatchDays.map((day) => {
+      {queueSort === "due" && dispatchDays.map((day) => {
         const list = moves.filter((a) => (a.dispatch_day ?? 1) === day);
         return (
           <section className="queue-group" key={day}>
@@ -289,7 +354,7 @@ export function DecisionQueue() {
             <h2>Rejected</h2>
             <span className="group-note">
               {rejected.length} rejected
-              {tallyOf(result).decisionsCost > 0.5 ? ` · the current plan is ${usd(tallyOf(result).decisionsCost)} below the best possible` : ""}
+              {tallyOf(result).decisionsCost > 0.5 ? ` · the recommended plan is ${usd(tallyOf(result).decisionsCost)} below the best possible` : ""}
             </span>
           </header>
           {rejected.map((a) => (

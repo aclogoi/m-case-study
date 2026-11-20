@@ -4,11 +4,23 @@ import { usd, whole } from "../lib/format";
 import { useDecisions, useLookups, useStore, type Lookups } from "../state/store";
 import { Card } from "./ui";
 
-type Mode = "none" | "plan";
+/** Do nothing; exactly what is approved so far; or the full recommended plan (approved plus everything still waiting). */
+type Mode = "none" | "approved" | "plan";
 
-const unmet = (r: InventoryRow, m: Mode) => (m === "none" ? r.unmet_none : r.unmet_plan);
-const idle = (r: InventoryRow, m: Mode) => (m === "none" ? r.idle_none : r.idle_plan);
-const lostRevenue = (r: InventoryRow, m: Mode) => (m === "none" ? r.unmet_revenue_none : r.unmet_revenue_plan);
+const unmet = (r: InventoryRow, m: Mode) => r[`unmet_${m}`];
+const idle = (r: InventoryRow, m: Mode) => r[`idle_${m}`];
+const lostRevenue = (r: InventoryRow, m: Mode) => r[`unmet_revenue_${m}`];
+
+/**
+ * Against doing nothing, is this cell better or worse for customers? Only rentals turned
+ * away count: nearly every cell's idle count moves under a plan, and marking them all
+ * hides the few cells where a branch is newly short.
+ */
+function shift(r: InventoryRow, m: Mode): "better" | "worse" | null {
+  if (m === "none") return null;
+  const d = Math.round(unmet(r, m)) - Math.round(r.unmet_none);
+  return d < 0 ? "better" : d > 0 ? "worse" : null;
+}
 
 /** A cell is "short" when rentals are turned away, else "idle" when trucks are left on the lot. */
 function stateOf(r: InventoryRow, m: Mode): { kind: "short" | "idle" | "even"; n: number } {
@@ -30,7 +42,7 @@ interface Hover {
 function Tooltip({ hover }: { hover: Hover }) {
   const L = useLookups();
   const r = hover.row;
-  const left = Math.min(hover.x, window.innerWidth - 330);
+  const left = Math.min(hover.x, window.innerWidth - 400);
   return (
     <div className="tip board-tip" style={{ left, top: hover.y }} role="tooltip">
       <div className="tip-title">
@@ -41,23 +53,27 @@ function Tooltip({ hover }: { hover: Hover }) {
           <tr>
             <th />
             <th>If we do nothing</th>
-            <th>With the plan</th>
+            <th>Approved so far</th>
+            <th>Full plan</th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <td>Rentals turned away</td>
             <td>{whole(r.unmet_none)}</td>
+            <td>{whole(r.unmet_approved)}</td>
             <td>{whole(r.unmet_plan)}</td>
           </tr>
           <tr>
             <td>Revenue they represent</td>
             <td>{usd(r.unmet_revenue_none)}</td>
+            <td>{usd(r.unmet_revenue_approved)}</td>
             <td>{usd(r.unmet_revenue_plan)}</td>
           </tr>
           <tr>
             <td>Trucks sitting idle</td>
             <td>{whole(r.idle_none)}</td>
+            <td>{whole(r.idle_approved)}</td>
             <td>{whole(r.idle_plan)}</td>
           </tr>
         </tbody>
@@ -101,8 +117,8 @@ function Grid({ classId, rows, mode, maxShort, maxIdle, onHover }: { classId: st
               const d = days[i];
               if (!r) return <div key={d} className={`cell cell-even ${d === 8 ? "week-start" : ""}`} role="cell" />;
               const s = stateOf(r, mode);
-              const before = stateOf(r, "none");
-              const changed = mode === "plan" && (before.kind !== s.kind || before.n !== s.n);
+              const moved = shift(r, mode);
+              const before = Math.round(r.unmet_none);
               const level = s.kind === "short" ? step(s.n, maxShort) : s.kind === "idle" ? step(s.n, maxIdle) : 0;
               const label =
                 s.kind === "short" ? `${s.n} rentals turned away` : s.kind === "idle" ? `${s.n} trucks sitting idle` : "neither short nor idle";
@@ -111,8 +127,8 @@ function Grid({ classId, rows, mode, maxShort, maxIdle, onHover }: { classId: st
                   key={d}
                   role="cell"
                   tabIndex={0}
-                  className={`cell cell-${s.kind} lvl-${level} ${d === 8 ? "week-start" : ""} ${changed ? "is-changed" : ""}`}
-                  aria-label={`${b.short_name}, ${L.date(d)}: ${label}${changed ? ", changed by the plan" : ""}`}
+                  className={`cell cell-${s.kind} lvl-${level} ${d === 8 ? "week-start" : ""} ${moved ? `is-${moved}` : ""}`}
+                  aria-label={`${b.short_name}, ${L.date(d)}: ${label}${moved === "worse" ? `, more turned away than the ${before} if nothing is done` : moved === "better" ? `, fewer turned away than the ${before} if nothing is done` : ""}`}
                   onMouseEnter={(e) => {
                     const box = e.currentTarget.getBoundingClientRect();
                     onHover({ row: r, x: box.left, y: box.bottom + 6 });
@@ -131,7 +147,7 @@ function Grid({ classId, rows, mode, maxShort, maxIdle, onHover }: { classId: st
                     </>
                   )}
                   {s.kind === "idle" && <b>{s.n}</b>}
-                  {changed && <i className="changed-dot" aria-hidden="true" />}
+                  {moved && <i className={`shift shift-${moved}`} aria-hidden="true">{moved === "worse" ? "▲" : "▼"}</i>}
                 </div>
               );
             })}
@@ -170,7 +186,11 @@ function standouts(rows: InventoryRow[], mode: Mode, L: Lookups) {
     const idleDays = list.reduce((s, r) => s + idle(r, mode), 0);
     if (Math.round(away) >= 1) {
       const days = list.filter((r) => unmet(r, mode) >= 0.5).map((r) => r.day);
-      short.push({ n: away, text: `${L.branchName(b)} turns away about ${whole(away)} ${L.className(c)} ${Math.round(away) === 1 ? "rental" : "rentals"} ${span(days, L)}, worth ${usd(lost)}.` });
+      const more = Math.round(away) - Math.round(list.reduce((s, r) => s + r.unmet_none, 0));
+      short.push({
+        n: away,
+        text: `${L.branchName(b)} turns away about ${whole(away)} ${L.className(c)} ${Math.round(away) === 1 ? "rental" : "rentals"} ${span(days, L)}, worth ${usd(lost)}.${mode !== "none" && more > 0 ? ` That is ${more} more than if nothing is done: trucks or returns it would have used go elsewhere.` : ""}`,
+      });
     }
     if (Math.round(idleDays) >= 1) {
       const daysIdle = list.filter((r) => idle(r, mode) >= 0.5).length;
@@ -191,7 +211,8 @@ function Stat({ value, label, was, lowerIsBetter = true }: { value: string; labe
     <div className="stat">
       <div className="stat-value">{value}</div>
       <div className="stat-label">{label}</div>
-      {was && <div className={`stat-was ${Math.abs(was.delta) < 0.5 ? "" : good ? "pos" : "neg"}`}>{was.text}</div>}
+      {/* The line is always there, so the page does not jump when the view is switched. */}
+      <div className={`stat-was ${!was || Math.abs(was.delta) < 0.5 ? "" : good ? "pos" : "neg"}`}>{was ? was.text : "the starting point"}</div>
     </div>
   );
 }
@@ -216,7 +237,8 @@ export function SituationBoard() {
   }, [inventory]);
 
   if (!result) return null;
-  const t: SituationTotals = mode === "none" ? result.situation.do_nothing : result.situation.plan;
+  const t: SituationTotals = mode === "none" ? result.situation.do_nothing : mode === "approved" ? result.situation.approved : result.situation.plan;
+  const compared = mode !== "none";
   const base = result.situation.do_nothing;
   const days = result.params.horizon_days;
   const out = standouts(inventory, mode, L);
@@ -230,25 +252,30 @@ export function SituationBoard() {
     <div className="view">
       <div className="board-top">
         <div>
-          <h1>{mode === "none" ? `If nothing is done over the next ${days} days` : "With the current plan"}</h1>
+          <h1>{mode === "none" ? `If nothing is done over the next ${days} days` : mode === "approved" ? "With what is approved so far" : "With the full recommended plan"}</h1>
           <p className="why">
             {mode === "none"
               ? "Where the fleet is in the wrong place: branches turning rentals away while others have trucks sitting on the lot."
+              : mode === "approved"
+                ? counts.approved > 0
+                  ? `Only the ${counts.approved} ${counts.approved === 1 ? "action" : "actions"} you have approved, and nothing else. ${counts.pending} ${counts.pending === 1 ? "recommendation is" : "recommendations are"} still waiting and not counted here.`
+                  : "Nothing is approved yet, so this is the same as doing nothing."
               : hasPlan
-                ? `What the ${actions.length} recommended ${actions.length === 1 ? "action fixes" : "actions fix"}, and what ${actions.length === 1 ? "it leaves" : "they leave"}. ${counts.approved} approved, ${counts.pending} still waiting for a decision.`
+                ? `What the ${actions.length} recommended ${actions.length === 1 ? "action fixes" : "actions fix"}, and what ${actions.length === 1 ? "it leaves" : "they leave"}. ${counts.approved} approved, ${counts.pending} still waiting${counts.pending > 0 ? ": this assumes you approve the rest" : ""}.`
                 : "The tool recommends no action on these inputs, so the plan is the same as doing nothing."}
           </p>
         </div>
         <div className="seg seg-lg" role="group" aria-label="Which situation to show">
           <button type="button" className={mode === "none" ? "on" : ""} aria-pressed={mode === "none"} onClick={() => setMode("none")}>If we do nothing</button>
-          <button type="button" className={mode === "plan" ? "on" : ""} aria-pressed={mode === "plan"} onClick={() => setMode("plan")}>With the current plan</button>
+          <button type="button" className={mode === "approved" ? "on" : ""} aria-pressed={mode === "approved"} onClick={() => setMode("approved")} title="Exactly the actions you have approved, and nothing else">Approved so far</button>
+          <button type="button" className={mode === "plan" ? "on" : ""} aria-pressed={mode === "plan"} onClick={() => setMode("plan")} title="What you have approved plus everything the tool still recommends">Full recommended plan</button>
         </div>
       </div>
 
       <div className="board-stats">
-        <Stat value={whole(t.unserved_rentals)} label="rentals turned away" was={mode === "plan" ? change(t.unserved_rentals, base.unserved_rentals, whole) : undefined} />
-        <Stat value={usd(t.unserved_revenue)} label="rental revenue those rentals would bring in" was={mode === "plan" ? change(t.unserved_revenue, base.unserved_revenue, usd) : undefined} />
-        <Stat value={whole(t.idle_truck_days)} label="truck-days sitting idle" was={mode === "plan" ? change(t.idle_truck_days, base.idle_truck_days, whole) : undefined} />
+        <Stat value={whole(t.unserved_rentals)} label="rentals turned away" was={compared ? change(t.unserved_rentals, base.unserved_rentals, whole) : undefined} />
+        <Stat value={usd(t.unserved_revenue)} label="rental revenue those rentals would bring in" was={compared ? change(t.unserved_revenue, base.unserved_revenue, usd) : undefined} />
+        <Stat value={whole(t.idle_truck_days)} label="truck-days sitting idle" was={compared ? change(t.idle_truck_days, base.idle_truck_days, whole) : undefined} />
         <div className="stat stat-cta">
           {counts.pending > 0 ? (
             <>
@@ -279,7 +306,8 @@ export function SituationBoard() {
           <div className="legend board-legend">
             <span><i className="cell-short lvl-3" />“3 short” = rentals turned away</span>
             <span><i className="cell-idle lvl-3" />number = trucks sitting idle</span>
-            {mode === "plan" && <span><i className="changed-key" />changed by the plan</span>}
+            {compared && <span><i className="shift shift-better">▼</i>fewer turned away</span>}
+            {compared && <span><i className="shift shift-worse">▲</i>more turned away than doing nothing</span>}
           </div>
         }
       >
@@ -292,9 +320,9 @@ export function SituationBoard() {
       </Card>
 
       <div className="grid-2">
-        <Card title={mode === "none" ? "Where rentals are being turned away" : "Shortages the plan leaves"}>
+        <Card title={mode === "none" ? "Where rentals are being turned away" : mode === "approved" ? "Shortages left with what is approved" : "Shortages the plan leaves"}>
           {out.short.length === 0 ? (
-            <p className="empty-line">No branch turns rentals away{mode === "plan" ? " under the current plan" : ""}.</p>
+            <p className="empty-line">No branch turns rentals away{mode === "plan" ? " under the recommended plan" : mode === "approved" ? " with what is approved" : ""}.</p>
           ) : (
             <ul className="plain-list">
               {out.short.map((s) => (
@@ -303,7 +331,7 @@ export function SituationBoard() {
             </ul>
           )}
         </Card>
-        <Card title={mode === "none" ? "Where trucks are sitting idle" : "Idle trucks the plan leaves"}>
+        <Card title={mode === "none" ? "Where trucks are sitting idle" : mode === "approved" ? "Idle trucks left with what is approved" : "Idle trucks the plan leaves"}>
           {out.idle.length === 0 ? (
             <p className="empty-line">No trucks are left sitting idle.</p>
           ) : (

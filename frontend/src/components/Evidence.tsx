@@ -19,7 +19,7 @@ function Summary({ result }: { result: SolveResponse }) {
       <div className="ev-status">
         <StatusBadge status={plan.status} gap={plan.gap} />
         <span className="fine">
-          Current plan solved in {Math.round(plan.solve_ms)} ms · everything on this page {Math.round(result.total_solve_ms)} ms{result.cached ? " · cached" : ""}
+          Recommended plan solved in {Math.round(plan.solve_ms)} ms · everything on this page {Math.round(result.total_solve_ms)} ms{result.cached ? " · cached" : ""}
         </span>
       </div>
       <table className="tbl compact">
@@ -27,7 +27,7 @@ function Summary({ result }: { result: SolveResponse }) {
           <tr>
             <th>Expected contribution, 14 days</th>
             <th className="r">Do nothing</th>
-            <th className="r">Current plan</th>
+            <th className="r">Recommended plan</th>
             <th className="r">Change</th>
           </tr>
         </thead>
@@ -53,7 +53,7 @@ function Summary({ result }: { result: SolveResponse }) {
         </tbody>
       </table>
       <p className="fine">
-        The current plan is the joint plan under your decisions so far ({decided === 0 ? "none yet, so it is the best plan found" : `${result.decision.approved_count} approved, ${result.decision.rejected_action_ids.length} rejected`}).
+        The recommended plan is the joint plan under your decisions so far: what you have approved, plus whatever the tool still recommends ({decided === 0 ? "none yet, so it is the best plan found" : `${result.decision.approved_count} approved, ${result.decision.rejected_action_ids.length} rejected`}).
         Expected means averaged over the three demand scenarios. Penalties for broken commitments are reported separately.
       </p>
     </Card>
@@ -85,7 +85,7 @@ function StrategyCard({ result }: { result: SolveResponse }) {
       <StrategyBars strategies={s} mode={mode} />
       {match && (
         <p className="note">
-          Joint matches {match.label.toLowerCase()} here: the other levers add nothing on these inputs, so the joint plan is not shown winning.
+          Using both levers earns no more than {match.label.toLowerCase()} here. {match.id === "moves" ? "Pricing changes add" : "Moving trucks adds"} nothing on these inputs, so the tool leaves {match.id === "moves" ? "prices alone" : "the fleet where it is"} rather than recommend changes that earn nothing.
         </p>
       )}
       <table className="tbl compact">
@@ -149,20 +149,59 @@ function ConditionalCard() {
   );
 }
 
+/**
+ * The alternate cases. They are not part of the main walk-through: they answer what a
+ * sceptical reader asks after it, whether the tool holds back when acting would not pay.
+ */
+function CasesCard() {
+  const { cases, caseId, changeCase, solving } = useStore();
+  if (cases.length < 2) return null;
+  return (
+    <Card
+      title="Does it know when to leave things alone?"
+      subtitle="The main network shows the tool acting. These variants of the same network make acting pay less, to check that it then recommends less. Loading one replaces the plan on every tab and clears your decisions, reported bookings and slider changes."
+    >
+      <ul className="case-list">
+        {cases.map((c) => {
+          const on = c.id === caseId;
+          return (
+            <li key={c.id} className={on ? "on" : ""}>
+              <div>
+                <div className="case-name">
+                  {c.label}
+                  {on && <span className="pill">loaded now</span>}
+                </div>
+                <p className="fine">{c.description}</p>
+              </div>
+              {!on && (
+                <button type="button" className="btn btn-small" onClick={() => changeCase(c.id)} disabled={solving}>
+                  {c.id === "default" ? "Back to this" : "Load this case"}
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </Card>
+  );
+}
+
 /** Everything that backs the recommendations, one click away from every view. */
 export function EvidenceDrawer() {
-  const { evidenceOpen, setEvidenceOpen, result, solving } = useStore();
+  const { evidenceOpen, evidenceSection, setEvidenceOpen, result, solving } = useStore();
   const closeRef = useRef<HTMLButtonElement>(null);
+  const toAssumptions = () => document.getElementById("assumptions")?.scrollIntoView({ block: "start" });
 
   useEffect(() => {
     if (!evidenceOpen) return;
-    closeRef.current?.focus();
+    closeRef.current?.focus({ preventScroll: true });
+    if (evidenceSection === "assumptions") toAssumptions();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setEvidenceOpen(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [evidenceOpen, setEvidenceOpen]);
+  }, [evidenceOpen, evidenceSection, setEvidenceOpen]);
 
   if (!evidenceOpen) return null;
   const net = result ? result.bridge.end - result.bridge.start : 0;
@@ -174,7 +213,8 @@ export function EvidenceDrawer() {
         <header className="drawer-head">
           <div>
             <h1>Why trust this?</h1>
-            <p className="why">The evidence behind the recommendations: how the strategies compare, where the money comes from, how the plan holds up if demand differs, and every assumption.</p>
+            <p className="why">The evidence behind the recommendations: how the strategies compare, where the money comes from, how the plan holds up if demand differs, whether it holds back when acting would not pay, and every assumption.</p>
+            <button type="button" className="link" onClick={toAssumptions}>Skip to the assumptions and sensitivity sliders ↓</button>
           </div>
           <button type="button" className="btn btn-small" ref={closeRef} onClick={() => setEvidenceOpen(false)}>Close</button>
         </header>
@@ -187,7 +227,7 @@ export function EvidenceDrawer() {
             <StrategyCard result={result} />
             <Card
               title="Plan against do nothing"
-              subtitle={`Contribution bridge for the current plan: from ${usd(result.bridge.start)} to ${usd(result.bridge.end)}, a net change of ${signedUsd(net)}. This is the only breakdown that sums to the total.`}
+              subtitle={`Contribution bridge for the recommended plan: from ${usd(result.bridge.start)} to ${usd(result.bridge.end)}, a net change of ${signedUsd(net)}. This is the only breakdown that sums to the total.`}
             >
               <div className="legend">
                 <span><i style={{ background: C.up }} />Raises contribution (+)</span>
@@ -198,7 +238,7 @@ export function EvidenceDrawer() {
             </Card>
             <Card
               title="The plan in low, base and high demand"
-              subtitle="The plan is fixed across scenarios; rentals served adapt to what shows up. Labels give the current plan's difference from do nothing in the same scenario."
+              subtitle="The plan is fixed across scenarios; rentals served adapt to what shows up. Labels give the recommended plan's difference from do nothing in the same scenario."
             >
               <div className="legend">
                 <span><i style={{ background: C.nothing }} />Do nothing</span>
@@ -210,6 +250,7 @@ export function EvidenceDrawer() {
             <ConditionalCard />
           </div>
         )}
+        <CasesCard />
         <AssumptionsPanel />
       </aside>
     </div>

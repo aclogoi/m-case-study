@@ -36,6 +36,13 @@ const SLIDERS: SliderDef[] = [
 
 const cap = (x: number) => Math.min(1, Math.max(0, x));
 
+/** Sliders that are off their default, as "Move cost ×2.00". Empty when the plan rests on the stated assumptions. */
+export function useChangedAssumptions(): string[] {
+  const { scenario, overrides } = useStore();
+  const p = scenario?.params;
+  return SLIDERS.filter((s) => overrides[s.key] !== undefined && overrides[s.key] !== (p ? p[s.key] : 1)).map((s) => `${s.label} ×${(overrides[s.key] ?? 1).toFixed(2)}`);
+}
+
 function staffCost(l: Lane, p: Params, mult: number) {
   return ((2 * l.miles) / p.staff_speed_mph * p.staff_hourly + 2 * l.miles * p.staff_per_mile) * mult;
 }
@@ -44,12 +51,10 @@ function haulerCost(l: Lane, p: Params, mult: number) {
 }
 
 export function AssumptionsPanel() {
-  const { cases, caseId, changeCase, scenario, overrides, setOverride, resetOverrides, addedBookings, approved, rejected } = useStore();
-  const decided = approved.length + rejected.length;
+  const { scenario, overrides, setOverride, resetOverrides } = useStore();
   const p = scenario?.params;
   const name = (id: string) => scenario?.branches.find((b) => b.id === id)?.short_name ?? id;
-  const current = cases.find((c) => c.id === caseId) ?? scenario?.case;
-  const dirty = Object.keys(overrides).length > 0;
+  const dirty = useChangedAssumptions().length > 0;
 
   function effective(key: SliderKey, v: number): string[] {
     if (!p || !scenario) return [];
@@ -76,19 +81,7 @@ export function AssumptionsPanel() {
 
   return (
     <div className="assumptions-panel">
-      <div className="side-section">
-        <label className="side-label" htmlFor="case">Case</label>
-        <select id="case" value={caseId} onChange={(e) => changeCase(e.target.value)}>
-          {cases.length === 0 && <option value={caseId}>{current?.label ?? caseId}</option>}
-          {cases.map((c) => (
-            <option key={c.id} value={c.id}>{c.label}</option>
-          ))}
-        </select>
-        {current && <p className="fine">{current.description}</p>}
-        <p className="fine">Changing the case resets the sliders and clears every approval, rejection and reported booking{decided + addedBookings.length > 0 ? ` (${decided} ${decided === 1 ? "decision" : "decisions"} and ${addedBookings.length} ${addedBookings.length === 1 ? "booking" : "bookings"} now)` : ""}.</p>
-      </div>
-
-      <div className="side-section">
+      <div className="side-section" id="assumptions">
         <div className="side-head">
           <span className="side-label">Sensitivity</span>
           <button type="button" className="link" onClick={resetOverrides} disabled={!dirty}>Reset</button>

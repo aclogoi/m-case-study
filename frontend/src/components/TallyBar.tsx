@@ -3,7 +3,7 @@ import { tallyOf } from "../lib/tally";
 import { useDecisions, useStore } from "../state/store";
 
 /**
- * The running tally: do nothing, what is approved so far, the current plan, and the
+ * The running tally: do nothing, what is approved so far, the recommended plan, and the
  * best the tool could do with no refusals. Sticky under the header on every view.
  */
 export function TallyBar() {
@@ -43,7 +43,7 @@ export function TallyBar() {
             {counts.rejected > 0 && counts.approved === 0 && t.decisionsCost > 0.5 && <> (costing {usd(t.decisionsCost)})</>}
           </span>
           {counts.approved > 0 && t.decisionsCost > 0.5 && (
-            <span title="Best possible minus the current plan: what your rejections, and any approval the plan would now do without, are costing">
+            <span title="Best possible minus the recommended plan: what your rejections, and any approval the plan would now do without, are costing">
               decisions cost <b>{usd(t.decisionsCost)}</b> so far
             </span>
           )}
@@ -65,7 +65,7 @@ export function TallyBar() {
           <span className="tally-end">Best possible <b>{usd(t.best)}</b></span>
           <span className="tally-key">
             <i className="k-approved" />Approved {signedUsd(approved)}
-            <i className="k-current" />Current plan {signedUsd(current)}
+            <span title="What you end up with if you approve everything still waiting, given your decisions so far"><i className="k-current" />If you approve the rest {signedUsd(current)}</span>
           </span>
         </div>
       )}

@@ -78,6 +78,13 @@ def test_inventory_rows_cover_branch_class_day(rich_response, rich_scenario):
     n = len(rich_scenario.branches) * len(rich_scenario.classes) * 14
     assert len(rich_response.inventory) == n
     assert all(r.unmet_none >= 0 and r.available_plan >= 0 for r in rich_response.inventory)
+    # nothing is approved here, so the approved-only columns are the do-nothing ones
+    assert all(
+        (r.unmet_approved, r.idle_approved, r.available_approved)
+        == (r.unmet_none, r.idle_none, r.available_none)
+        for r in rich_response.inventory
+    )
+    assert rich_response.situation.approved == rich_response.situation.do_nothing
 
 
 def test_why_sentence_for_the_timed_transfer(transfer_scenario):
@@ -88,8 +95,7 @@ def test_why_sentence_for_the_timed_transfer(transfer_scenario):
     assert len(actions) == 1
     assert actions[0].label == "Drive 2 box trucks Hartford to New Haven"
     assert actions[0].why == (
-        "Drive 2 box trucks Hartford to New Haven on Monday: they arrive Tuesday, "
-        "in time for Tuesday's shortage, and a hauler would arrive too late."
+        "Arrives Tuesday, in time for Tuesday's shortage, and a hauler would arrive too late."
     )
 
 

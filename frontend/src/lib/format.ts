@@ -76,14 +76,8 @@ function dateOf(startDate: string, day: number): Date {
   return new Date(Date.UTC(y, m - 1, d + day - 1));
 }
 
-const weekdayFmt = new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: "UTC" });
 const weekdayLongFmt = new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" });
 const dateFmt = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
-
-/** "Tue, day 2": weekday plus the 1-indexed day number of the horizon. */
-export function dayLabel(startDate: string, day: number): string {
-  return `${weekdayFmt.format(dateOf(startDate, day))}, day ${day}`;
-}
 
 export function weekdayLong(startDate: string, day: number): string {
   return weekdayLongFmt.format(dateOf(startDate, day));

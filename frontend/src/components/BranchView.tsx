@@ -10,7 +10,7 @@ import { ActionName, Card, Spinner } from "./ui";
 
 /** One action, phrased from this branch's side, with its dates. */
 function ask(a: Action, branchId: string, L: Lookups): { what: string; when: string } {
-  const horizon = `In effect days 1 to 14 (${L.date(1)} to ${L.date(14)})`;
+  const horizon = `In effect ${L.date(1)} to ${L.date(L.scenario.params.horizon_days)}`;
   const n = a.count ?? 0;
   switch (a.type) {
     case "move": {
@@ -19,12 +19,12 @@ function ask(a: Action, branchId: string, L: Lookups): { what: string; when: str
       if (a.origin === branchId)
         return {
           what: `Send ${trucks} to ${L.branchName(a.dest)} by ${how}`,
-          when: `Leaves ${L.day(a.dispatch_day)} (${a.dispatch_day ? L.date(a.dispatch_day) : ""}); available at ${L.branchName(a.dest)} from ${L.day(a.arrival_day)}`,
+          when: `Leaves ${L.day(a.dispatch_day)}; available at ${L.branchName(a.dest)} from ${L.day(a.arrival_day)}`,
         };
       if (a.dest === branchId)
         return {
           what: `Receive ${trucks} from ${L.branchName(a.origin)} by ${how}`,
-          when: `Dispatched ${L.day(a.dispatch_day)}; on your lot from ${L.day(a.arrival_day)} (${a.arrival_day ? L.date(a.arrival_day) : ""})`,
+          when: `Dispatched ${L.day(a.dispatch_day)}; on your lot from ${L.day(a.arrival_day)}`,
         };
       return { what: a.label, when: `Dispatched ${L.day(a.dispatch_day)}, arrives ${L.day(a.arrival_day)}` };
     }
@@ -137,7 +137,7 @@ function PlanDiffPanel() {
         </div>
       )}
       <p className="fine">
-        Current plan: {usd(change.before.decision.current_plan)} → {usd(result.decision.current_plan)} ({signedUsd(valueChange)}). The booking's own revenue is part of that change, with or without the plan.
+        Recommended plan: {usd(change.before.decision.current_plan)} → {usd(result.decision.current_plan)} ({signedUsd(valueChange)}). The booking's own revenue is part of that change, with or without the plan.
         {result.plan.broken_commitments.length > 0 && " Some commitments can no longer be covered: see the banner at the top."}
       </p>
     </div>
@@ -161,7 +161,7 @@ function BookingForm({ branchId }: { branchId: string }) {
 
   const set = <K extends keyof ReportedBooking>(k: K, v: ReportedBooking[K]) => setForm((f) => ({ ...f, [k]: v }));
   const days = Array.from({ length: s.params.horizon_days }, (_, i) => i + 1);
-  const valid = form.start_day >= 1 && form.start_day <= 14 && form.duration_days >= 1 && form.duration_days <= 7 && form.count >= 1 && form.count <= 10;
+  const valid = form.start_day >= 1 && form.start_day <= s.params.horizon_days && form.duration_days >= 1 && form.duration_days <= 7 && form.count >= 1 && form.count <= 10;
 
   const suggest = () => {
     setNote(null);
@@ -281,7 +281,7 @@ export function BranchView() {
         <Card><p className="empty-line">No scorecard was returned for this branch.</p></Card>
       ) : (
         <>
-          <Card title="What the current plan asks of this branch" subtitle="HQ sets rates, fees and incentives and pays for moves. These are the plan's actions that touch this branch, with their dates and whether HQ has approved them.">
+          <Card title="What the recommended plan asks of this branch" subtitle="HQ sets rates, fees and incentives and pays for moves. These are the plan's actions that touch this branch, with their dates and whether HQ has approved them.">
             <Asks card={card} result={result} />
           </Card>
 

@@ -327,14 +327,19 @@ export interface InventoryRow {
   day: number;
   available_none: number;
   available_plan: number;
+  /** `_approved`: exactly the approved actions and nothing else (equals `_none` when nothing is approved). */
+  available_approved: number;
   unmet_none: number;
   unmet_plan: number;
+  unmet_approved: number;
   /** In-horizon rental revenue the rentals turned away that day would have earned. */
   unmet_revenue_none: number;
   unmet_revenue_plan: number;
+  unmet_revenue_approved: number;
   /** Trucks still on the lot after the day's rentals and dispatches left. */
   idle_none: number;
   idle_plan: number;
+  idle_approved: number;
 }
 
 export interface SituationTotals {
@@ -346,6 +351,8 @@ export interface SituationTotals {
 export interface Situation {
   do_nothing: SituationTotals;
   plan: SituationTotals;
+  /** Exactly the approved actions and nothing else. */
+  approved: SituationTotals;
 }
 
 /** Expected contribution of four reference plans, on the same inputs. */

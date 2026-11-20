@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ApiError, BACKEND_START_COMMAND, explainAction } from "../api/client";
 import type { Action, ExplainResponse, SolveResponse, TransferDetail } from "../api/types";
-import { MODE_LABEL, TYPE_LABEL, quantityText } from "../lib/actions";
+import { MODE_LABEL, TYPE_LABEL, dueOrder, quantityText } from "../lib/actions";
 import { diffPlans } from "../lib/diff";
 import { signedUsd, usd, usdCents } from "../lib/format";
 import { actionById, useDecisions, useLookups, useStore } from "../state/store";
@@ -66,14 +66,14 @@ function TransferCard({ t }: { t: TransferDetail }) {
       <div className="timeline">
         <div className="tl-step">
           <div className="tl-label">Dispatched</div>
-          <div className="tl-value">{L.day(t.dispatch_day)}</div>
-          <div className="fine">{L.date(t.dispatch_day)} · leaves {L.branchName(t.donor_branch_id)}</div>
+          <div className="tl-value">{L.date(t.dispatch_day)}</div>
+          <div className="fine">Leaves {L.branchName(t.donor_branch_id)}</div>
         </div>
         <div className="tl-arrow" aria-hidden="true">→</div>
         <div className="tl-step">
           <div className="tl-label">Arrives</div>
-          <div className="tl-value">{L.day(t.arrival_day)}</div>
-          <div className="fine">{L.date(t.arrival_day)} · available at {L.branchName(t.receiver_branch_id)}</div>
+          <div className="tl-value">{L.date(t.arrival_day)}</div>
+          <div className="fine">Available at {L.branchName(t.receiver_branch_id)}</div>
         </div>
         <div className="tl-arrow" aria-hidden="true">{inTime === false ? "✕" : "→"}</div>
         <div className="tl-step">
@@ -137,7 +137,7 @@ function LeverCard({ action, data }: { action: Action; data: ExplainResponse }) 
             <Kv k="Estimated payments">{usd(action.cost)}</Kv>
           </>
         )}
-        <Kv k="In effect">Days 1 to 14 ({L.date(1)} to {L.date(14)})</Kv>
+        <Kv k="In effect">{L.date(1)} to {L.date(L.scenario.params.horizon_days)}</Kv>
       </dl>
       {d ? (
         <>
@@ -166,7 +166,7 @@ function Counterfactual({ data, plan }: { data: ExplainResponse; plan: Action[] 
           {reduction > 0.5 ? `−${usd(reduction).replace("−", "")}` : reduction < -0.5 ? `+${usd(-reduction)}` : usd(0)}
         </span>
         <span className="cf-side">
-          <span>Current plan <strong>{usd(data.plan_value)}</strong></span>
+          <span>Recommended plan <strong>{usd(data.plan_value)}</strong></span>
           <span>Replanned without it <strong>{usd(data.replanned_value)}</strong></span>
         </span>
       </div>
@@ -209,6 +209,28 @@ function Counterfactual({ data, plan }: { data: ExplainResponse; plan: Action[] 
   );
 }
 
+/** Where to go once this one is settled: the next recommendation still waiting, in due order. */
+function NextDecision({ currentId, decided }: { currentId: string | null; decided: boolean }) {
+  const { openAction, setView } = useStore();
+  const { actions, pendingActions, counts } = useDecisions();
+  const order = dueOrder(actions);
+  const at = order.findIndex((a) => a.id === currentId);
+  const waiting = new Set(pendingActions.map((a) => a.id));
+  // The next waiting action after this one, wrapping round to the start of the queue.
+  const next = [...order.slice(at + 1), ...order.slice(0, Math.max(at, 0))].find((a) => waiting.has(a.id) && a.id !== currentId);
+  if (next) {
+    return (
+      <button type="button" className={`btn ${decided ? "btn-primary" : ""}`} onClick={() => openAction(next.id)} title={next.label}>
+        Next decision ›
+      </button>
+    );
+  }
+  if (decided && counts.approved > 0) {
+    return <button type="button" className="btn btn-primary" onClick={() => setView("handoff")}>Go to hand-off ›</button>;
+  }
+  return null;
+}
+
 export function ActionDetail() {
   const { result, selectedActionId, setView, solving, selectBranch, rejected } = useStore();
   const L = useLookups();
@@ -221,7 +243,7 @@ export function ActionDetail() {
     const wasRejected = rejected.find((a) => a.id === selectedActionId);
     return (
       <div className="view">
-        <Card title={selectedActionId ? "That action is not in the current plan" : "Choose an action"}>
+        <Card title={selectedActionId ? "That action is not in the recommended plan" : "Choose an action"}>
           <p className="empty-line">
             {wasRejected
               ? `You rejected "${wasRejected.label}". Restore it from the Rejected list to see its detail again.`
@@ -229,12 +251,16 @@ export function ActionDetail() {
                 ? "The plan was rebuilt with different inputs or decisions and no longer includes it."
                 : "Open an action from the decision list to see its timing, what refusing it would cost, and the branches it affects."}
           </p>
-          <button type="button" className="btn" onClick={() => setView("decisions")}>Back to decisions</button>
+          <div className="next-row">
+            <button type="button" className="btn" onClick={() => setView("decisions")}>Back to decisions</button>
+            <NextDecision currentId={null} decided />
+          </div>
         </Card>
       </div>
     );
   }
 
+  const isApproved = approvedIds.has(action.id) || action.decision === "approved";
   const cards = data?.affected_scorecards ?? result.scorecards.filter((s) => action.affected_branches.includes(s.branch_id));
 
   return (
@@ -251,7 +277,10 @@ export function ActionDetail() {
               <BranchChips ids={action.affected_branches} />
             </div>
           </div>
-          <DecisionButtons action={action} state={approvedIds.has(action.id) || action.decision === "approved" ? "approved" : "pending"} />
+          <div className="detail-actions">
+            <DecisionButtons action={action} state={isApproved ? "approved" : "pending"} />
+            <NextDecision currentId={action.id} decided={isApproved} />
+          </div>
         </div>
       </div>
 
@@ -277,7 +306,15 @@ export function ActionDetail() {
         </div>
       ) : null}
 
-      <Card title="Affected branches" subtitle="Actual impact of the whole current plan under current rules, beside the adjusted scorecard. Both columns cover every action that touches the branch, not this one alone.">
+      {/* Whole-plan figures, not this action's: closed by default so they are not read as its effect. */}
+      <details className="card fold">
+        <summary>
+          <span className="fold-title">Affected branches: {cards.map((c) => L.branchName(c.branch_id)).join(", ")}</span>
+          <span className="fold-sub">Scorecards under the whole recommended plan, not this action alone</span>
+        </summary>
+        <p className="card-sub">
+          Actual impact of the whole recommended plan under current rules, beside the adjusted scorecard. Both columns cover every action that touches the branch, so no figure here is the effect of this action by itself.
+        </p>
         <div className="branch-pairs">
           {cards.map((c) => (
             <div className="branch-pair" key={c.branch_id}>
@@ -301,7 +338,7 @@ export function ActionDetail() {
         <p className="fine">
           The adjusted scorecard protects revenue against the baseline, not utilization. See Branches for what it does not fix.
         </p>
-      </Card>
+      </details>
     </div>
   );
 }

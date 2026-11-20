@@ -13,11 +13,14 @@ import type {
   SolveResponse,
   VehicleClass,
 } from "../api/types";
-import { calendarDate, dayLabel, longDate, weekdayLong } from "../lib/format";
+import { calendarDate, longDate, weekdayLong } from "../lib/format";
 
 export type View = "situation" | "decisions" | "action" | "branches" | "handoff";
 export type SliderKey = "elasticity_scale" | "fee_deterrence_scale" | "incentive_uptake_scale" | "move_cost_multiplier";
 export type SliderOverrides = Partial<Record<SliderKey, number>>;
+/** Decision queue order: by when each decision falls due, or by what refusing it would cost. */
+export type QueueSort = "due" | "value";
+export type EvidenceSection = "top" | "assumptions";
 
 export interface AppError {
   message: string;
@@ -60,12 +63,20 @@ interface Store {
   // selection
   view: View;
   evidenceOpen: boolean;
+  /** Where the evidence drawer opens: at its top, or scrolled to the sliders. */
+  evidenceSection: EvidenceSection;
+  queueSort: QueueSort;
+  /** A case switch waiting for the user to confirm, because it would clear their work. */
+  caseSwitch: { id: string; message: string } | null;
   selectedActionId: string | null;
   selectedBranchId: string;
   // commands
   setCase: (id: string) => void;
   /** `setCase`, after asking first when there are decisions or reported bookings to lose. */
   changeCase: (id: string) => void;
+  confirmCaseSwitch: () => void;
+  cancelCaseSwitch: () => void;
+  setQueueSort: (s: QueueSort) => void;
   setOverride: (key: SliderKey, value: number) => void;
   resetOverrides: () => void;
   addBooking: (b: ReportedBooking) => void;
@@ -76,7 +87,7 @@ interface Store {
   restore: (id: string) => void;
   dismissChange: () => void;
   setView: (v: View) => void;
-  setEvidenceOpen: (open: boolean) => void;
+  setEvidenceOpen: (open: boolean, section?: EvidenceSection) => void;
   openAction: (id: string) => void;
   selectBranch: (id: string, show?: boolean) => void;
   retry: () => void;
@@ -129,7 +140,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [solving, setSolving] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
   const [view, setView] = useState<View>("situation");
-  const [evidenceOpen, setEvidenceOpen] = useState(false);
+  const [evidenceOpen, setEvidenceOpenState] = useState(false);
+  const [evidenceSection, setEvidenceSection] = useState<EvidenceSection>("top");
+  const [queueSort, setQueueSort] = useState<QueueSort>("due");
+  const [caseSwitch, setCaseSwitch] = useState<{ id: string; message: string } | null>(null);
   const [selectedActionId, setSelectedActionId] = useState<string | null>(null);
   const [selectedBranchId, setSelectedBranchId] = useState("HFD");
   const [retryTick, setRetryTick] = useState(0);
@@ -267,12 +281,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           decisions > 0 ? `${decisions} ${decisions === 1 ? "decision" : "decisions"}` : "",
           bookings > 0 ? `${bookings} reported ${bookings === 1 ? "booking" : "bookings"}` : "",
         ].filter(Boolean);
-        if (!window.confirm(`Switching case clears your ${parts.join(" and ")} and resets the sliders. Continue?`)) return;
+        setCaseSwitch({ id, message: `Switching case clears your ${parts.join(" and ")} and resets the sliders.` });
+        return;
       }
       setCase(id);
     },
     [caseId, approved, rejected, addedBookings, setCase],
   );
+
+  const confirmCaseSwitch = useCallback(() => {
+    if (caseSwitch) setCase(caseSwitch.id);
+    setCaseSwitch(null);
+  }, [caseSwitch, setCase]);
+
+  const cancelCaseSwitch = useCallback(() => setCaseSwitch(null), []);
+
+  const setEvidenceOpen = useCallback((open: boolean, section: EvidenceSection = "top") => {
+    setEvidenceSection(section);
+    setEvidenceOpenState(open);
+  }, []);
 
   const setOverride = useCallback((key: SliderKey, value: number) => {
     debounceNext.current = true;
@@ -365,7 +392,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     caseId, overrides, addedBookings, approved, rejected, cases, scenario, changeCase,
     result, resultRequest: solved?.request ?? null, previous, change,
     values, valuesFresh: !!result && valuesFor === result, valuesError, approvedSnapshots,
-    solving, error, view, evidenceOpen, selectedActionId, selectedBranchId,
+    solving, error, view, evidenceOpen, evidenceSection, queueSort, caseSwitch, selectedActionId, selectedBranchId,
+    confirmCaseSwitch, cancelCaseSwitch, setQueueSort,
     setCase, setOverride, resetOverrides, addBooking, removeBooking, approve, undoApprove, reject, restore, dismissChange,
     setView, setEvidenceOpen, openAction, selectBranch, retry,
   };
@@ -418,7 +446,7 @@ export interface Lookups {
   branchName: (id: string | null | undefined) => string;
   vehicleClass: (id: string | null | undefined) => VehicleClass | undefined;
   className: (id: string | null | undefined, n?: number) => string;
-  /** "Tue, day 2" */
+  /** "Tue 24 Nov", or a dash when there is no day. */
   day: (d: number | null | undefined) => string;
   /** "Tuesday" */
   weekday: (d: number) => string;
@@ -440,7 +468,7 @@ export function makeLookups(scenario: Scenario): Lookups {
       const name = id ? classes.get(id)?.short_name ?? id : "truck";
       return n === 1 ? name : `${name}s`;
     },
-    day: (d) => (d === null || d === undefined ? "—" : dayLabel(scenario.start_date, d)),
+    day: (d) => (d === null || d === undefined ? "—" : calendarDate(scenario.start_date, d)),
     weekday: (d) => weekdayLong(scenario.start_date, d),
     date: (d) => calendarDate(scenario.start_date, d),
     longDate: (d) => longDate(scenario.start_date, d),

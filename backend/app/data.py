@@ -229,12 +229,13 @@ CASES: list[CaseInfo] = [
     ),
     CaseInfo(
         id="joint_equals_moves",
-        label="Joint equals moves only",
+        label="Pricing adds nothing",
         description=(
             "Same network as the default with pricing made unattractive: Portland's "
             "elasticity is the network -1.2, return-incentive uptake is zero, and each "
             "price, fee or incentive change costs $5,000 instead of $50. Moves keep their "
-            "default cost, so the joint plan matches moves only."
+            "default cost, so the tool recommends moving trucks and leaves prices alone: "
+            "using both levers earns no more than moves on their own."
         ),
     ),
 ]

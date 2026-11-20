@@ -181,11 +181,15 @@ def build_downside(none: Solution, plan: Solution) -> list[DownsideRow]:
     ]
 
 
-def build_inventory(none: Solution, plan: Solution) -> list[InventoryRow]:
-    a0, a1 = none.expect(none.avail), plan.expect(plan.avail)
-    u0, u1 = none.expect(none.unmet), plan.expect(plan.unmet)
-    v0, v1 = none.expect(none.unmet_revenue), plan.expect(plan.unmet_revenue)
-    i0, i1 = none.expect(none.idle), plan.expect(plan.idle)
+def build_inventory(none: Solution, plan: Solution,
+                    only: Optional[Solution] = None) -> list[InventoryRow]:
+    """only: exactly the approved actions; defaults to do nothing."""
+    only = only or none
+    a0, a1, a2 = none.expect(none.avail), plan.expect(plan.avail), only.expect(only.avail)
+    u0, u1, u2 = none.expect(none.unmet), plan.expect(plan.unmet), only.expect(only.unmet)
+    v0, v1, v2 = (none.expect(none.unmet_revenue), plan.expect(plan.unmet_revenue),
+                  only.expect(only.unmet_revenue))
+    i0, i1, i2 = none.expect(none.idle), plan.expect(plan.idle), only.expect(only.idle)
     rows = []
     for i, b in enumerate(plan.branch_ids):
         for j, k in enumerate(plan.class_ids):
@@ -195,12 +199,16 @@ def build_inventory(none: Solution, plan: Solution) -> list[InventoryRow]:
                         branch_id=b, class_id=k, day=d + 1,
                         available_none=round(float(a0[i, j, d]), 3),
                         available_plan=round(float(a1[i, j, d]), 3),
+                        available_approved=round(float(a2[i, j, d]), 3),
                         unmet_none=round(float(u0[i, j, d]), 3),
                         unmet_plan=round(float(u1[i, j, d]), 3),
+                        unmet_approved=round(float(u2[i, j, d]), 3),
                         unmet_revenue_none=r2(v0[i, j, d]),
                         unmet_revenue_plan=r2(v1[i, j, d]),
+                        unmet_revenue_approved=r2(v2[i, j, d]),
                         idle_none=round(float(i0[i, j, d]), 3),
                         idle_plan=round(float(i1[i, j, d]), 3),
+                        idle_approved=round(float(i2[i, j, d]), 3),
                     )
                 )
     return rows
@@ -275,15 +283,11 @@ def alt_mode_for(scenario: Scenario, params: Params, mv: M.MoveChoice,
 
 def _move_why(scenario: Scenario, params: Params, plan: Solution, none: Solution,
               mv: M.MoveChoice, names: _Names, chosen: bool = True) -> str:
+    # The label already names the move and the card gives its dates: start at the reason.
     n = mv.count
-    verb = "Drive" if mv.mode == "staff" else "Haul"
-    they = "it arrives" if n == 1 else "they arrive"
     them = "it" if n == 1 else "them"
     o, d = names.branch[mv.origin], names.branch[mv.dest]
-    head = (
-        f"{verb} {n} {names.trucks(mv.class_id, n)} {o} to {d} on "
-        f"{day_name(mv.dispatch_day)}: {they} {day_name(mv.arrival_day)}"
-    )
+    head = f"Arrives {day_name(mv.arrival_day)}"
     short = shortage_day(none, mv.dest, mv.class_id, mv.arrival_day)
     if short is None:
         broken = _broken_day(none, mv.dest, mv.class_id, mv.arrival_day)
@@ -334,26 +338,26 @@ def _rate_why(plan: Solution, none: Solution, b: str, k: str, pct: float,
     rev0 = float(none.expect(none.money)[M.C_RENT, i].sum())
     rev1 = float(plan.expect(plan.money)[M.C_RENT, i].sum())
     cls, br = names.cls[k], names.branch[b]
+    # The label already says which rate moves and where: start at the reason.
     if pct > 0:
-        head = f"Raise the {cls} rate {_pct(pct)} at {br}"
         if unmet0 >= 0.5:
+            phrase = _rentals_phrase(unmet0)
             return (
-                f"{head}: {_rentals_phrase(unmet0)} turned away there for lack of "
+                f"{phrase[0].upper()}{phrase[1:]} turned away there for lack of "
                 f"trucks if nothing changes, so the higher rate earns more from the "
                 f"trucks it has."
             )
     else:
-        head = f"Cut the {cls} rate {_pct(pct)} at {br}"
         if idle0 >= 0.5 and round(r1) > round(r0):
             n_idle = max(1, round(idle0))
             sit = "sits" if n_idle == 1 else "sit"
             return (
-                f"{head}: about {n_idle} {names.trucks(k, n_idle)} {sit} idle there "
+                f"About {n_idle} {names.trucks(k, n_idle)} {sit} idle there "
                 f"each day if nothing changes, and the discount lifts rentals from "
                 f"about {_n(r0)} to about {_n(r1)}."
             )
     return (
-        f"{head}: with the rest of the plan, {cls} rentals there go from about "
+        f"With the rest of the plan, {cls} rentals there go from about "
         f"{_n(r0)} to about {_n(r1)} and {br}'s rental revenue from {_usd(rev0)} to "
         f"{_usd(rev1)}."
     )
@@ -374,10 +378,7 @@ def _fee_facts(plan: Solution, j: str) -> tuple[float, float, Optional[str], flo
 def _fee_why(plan: Solution, j: str, fee: float, names: _Names) -> str:
     deterred, rebooked, to, share, fee_rev = _fee_facts(plan, j)
     br = names.branch[j]
-    s = (
-        f"Add a {_usd(fee)} drop fee on one-way rentals into {br}: it deters "
-        f"about {_n(deterred)} {_plural('rental', deterred)}"
-    )
+    s = f"Deters about {_n(deterred)} one-way {_plural('rental', deterred)} into {br}"
     # Name the rebooking branch only when it is the fee branch's own neighbour and
     # takes nearly all of the rebooked rentals; otherwise the detail misleads.
     if (
@@ -401,12 +402,10 @@ def _incentive_why(plan: Solution, none: Solution, b: str, amount: float,
                    names: _Names) -> str:
     i = plan.branch_ids.index(b)
     br = names.branch[b]
-    where = f" instead of {names.branch[frm]}" if frm else ""
     verb = "comes" if _n(redirects) == "1" else "come"
     s = (
-        f"Offer {_usd(amount)} to return at {br}{where}: about {_n(redirects)} "
-        f"{_plural('truck', redirects)} {verb} back to {br} for about {_usd(paid)} "
-        f"in payments"
+        f"About {_n(redirects)} {_plural('truck', redirects)} {verb} back to {br} "
+        f"for about {_usd(paid)} in payments"
     )
     unmet0 = float(none.expect(none.unmet)[i].sum())
     if unmet0 >= 0.5:
@@ -507,7 +506,7 @@ def build_situation(inventory: list[InventoryRow]) -> Situation:
             idle_truck_days=round(sum(getattr(r, f"idle_{suffix}") for r in inventory), 3),
         )
 
-    return Situation(do_nothing=tot("none"), plan=tot("plan"))
+    return Situation(do_nothing=tot("none"), plan=tot("plan"), approved=tot("approved"))
 
 
 def build_solve_response(
@@ -537,7 +536,7 @@ def build_solve_response(
         strategy_result(sid, label, sols[sid]) for sid, label, _m, _p in M.STRATEGIES
     ]
     plan_result = strategy_result("joint", "Current plan", plan)
-    inventory = build_inventory(none, plan)
+    inventory = build_inventory(none, plan, only)
     best = strategies[3].expected_contribution
     return SolveResponse(
         request_key=request_key,

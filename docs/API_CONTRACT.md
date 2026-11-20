@@ -67,7 +67,7 @@ joint and do-nothing solves).
 | --- | --- |
 | `default` | Hartford to New Haven short transfer wins by staff drive (a hauler arrives too late); Portland is fixed by pricing because hauling back is expensive |
 | `high_move_cost` | Every intervention costs more than it creates; the plan has no actions |
-| `joint_equals_moves` | Joint matches moves only |
+| `joint_equals_moves` | Labelled "Pricing adds nothing": using both levers earns no more than moves on their own, so the plan has moves and no pricing changes |
 
 "Hartford reports a missing booking" is not a case: it is the `default` case plus one
 `added_bookings` entry that changes the plan. `data.py` exports the entry that does it
@@ -136,7 +136,10 @@ interface BranchScorecard {
 interface ScorecardNumbers { revenue: number; rented_truck_days: number; assigned_fleet_days: number; utilization: number }
 
 interface InventoryRow { branch_id: string; class_id: string; day: number;
-  available_none: number; available_plan: number; unmet_none: number; unmet_plan: number }
+  available_none: number; available_plan: number; available_approved: number;
+  unmet_none: number; unmet_plan: number; unmet_approved: number;
+  unmet_revenue_none: number; unmet_revenue_plan: number; unmet_revenue_approved: number;
+  idle_none: number; idle_plan: number; idle_approved: number }
 
 interface ExplainResponse {
   action: Action;
@@ -327,7 +330,8 @@ browser keeps the rejected `Action` objects it had so it can list and restore th
 | `decision.do_nothing` / `best_possible` / `current_plan` / `approved_only` | Expected contribution of: do nothing; joint with no decisions; the current plan; exactly the approved actions and nothing else (equals `do_nothing` when nothing is approved) |
 | `decision.approved_only_broken` / `approved_only_penalty` | Expected broken commitments and penalty of the approved-only plan. Contribution excludes penalties, so `approved_only` can exceed `best_possible` when the approved actions alone leave a confirmed booking unserved; net of the penalty it cannot |
 | `decision.cost_of_rejections` | `best_possible - current_plan` |
-| `situation.do_nothing` / `situation.plan` | Horizon totals: `unserved_rentals`, `unserved_revenue`, `idle_truck_days` |
+| `situation.do_nothing` / `situation.plan` / `situation.approved` | Horizon totals: `unserved_rentals`, `unserved_revenue`, `idle_truck_days`. `approved` is exactly the approved actions and nothing else |
+| `inventory[].*_approved` | The same daily figures under exactly the approved actions; equal to `*_none` when nothing is approved |
 | `inventory[].unmet_revenue_none` / `_plan` | In-horizon rental revenue the unserved new demand starting that day would have earned, at the tier in force |
 | `inventory[].idle_none` / `_plan` | Trucks still on the lot after that day's rentals and dispatches left |
 

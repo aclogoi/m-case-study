@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { BACKEND_START_COMMAND, USE_MOCK } from "./api/client";
 import { ActionDetail } from "./components/ActionDetail";
+import { useChangedAssumptions } from "./components/AssumptionsPanel";
 import { BranchView } from "./components/BranchView";
 import { BrokenBanner } from "./components/BrokenBanner";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -34,16 +35,55 @@ function ErrorPanel({ compact }: { compact?: boolean }) {
   );
 }
 
+/** Asks before a case switch throws away decisions or reported bookings. In the page, not a browser dialog. */
+function CaseSwitchDialog() {
+  const { caseSwitch, cases, confirmCaseSwitch, cancelCaseSwitch } = useStore();
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!caseSwitch) return;
+    cancelRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") cancelCaseSwitch();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [caseSwitch, cancelCaseSwitch]);
+  if (!caseSwitch) return null;
+  const label = cases.find((c) => c.id === caseSwitch.id)?.label ?? caseSwitch.id;
+  return (
+    <div className="dialog-wrap no-print">
+      <div className="scrim" onClick={cancelCaseSwitch} />
+      <div className="dialog" role="alertdialog" aria-modal="true" aria-labelledby="case-switch-title" aria-describedby="case-switch-text">
+        <h2 id="case-switch-title">Switch to “{label}”?</h2>
+        <p id="case-switch-text">{caseSwitch.message} This cannot be undone.</p>
+        <div className="dialog-buttons">
+          <button type="button" className="btn" ref={cancelRef} onClick={cancelCaseSwitch}>Stay on this case</button>
+          <button type="button" className="btn btn-primary" onClick={confirmCaseSwitch}>Switch and clear</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function App() {
-  const { scenario, result, solving, error, view, setView, selectedActionId, cases, caseId, changeCase, setEvidenceOpen } = useStore();
+  const { scenario, result, solving, error, view, setView, selectedActionId, cases, caseId, changeCase, setEvidenceOpen, resetOverrides } = useStore();
+  // The main network is the default; anything else is an alternate case loaded from the evidence drawer.
+  const mainCaseId = cases[0]?.id ?? "default";
+  const alternate = caseId !== mainCaseId ? cases.find((c) => c.id === caseId)?.label ?? scenario?.case.label ?? caseId : null;
+  const changedAssumptions = useChangedAssumptions();
   const { counts } = useDecisions();
   const lookups = useMemo(() => (scenario ? makeLookups(scenario) : null), [scenario]);
   const ready = !!(lookups && result);
   const mainRef = useRef<HTMLElement>(null);
 
-  // Each view starts at its top; the scroll position of the last one is not carried over.
-  useEffect(() => {
-    mainRef.current?.scrollTo({ top: 0 });
+  // Each view starts at its top, with one exception: coming back from an action's detail
+  // returns to the same place in the decision list, not to its first card.
+  const shown = useRef<View>(view);
+  const queueScroll = useRef(0);
+  useLayoutEffect(() => {
+    const back = view === "decisions" && shown.current === "action";
+    shown.current = view;
+    mainRef.current?.scrollTo({ top: back ? queueScroll.current : 0 });
   }, [view, selectedActionId]);
 
   const tabs: { id: View; label: string; badge?: number }[] = [
@@ -78,15 +118,20 @@ export function App() {
               Rebuilding the plan…
             </span>
           )}
-          <label className="case-pick">
-            <span>Case</span>
-            <select value={caseId} onChange={(e) => changeCase(e.target.value)} aria-label="Case">
-              {cases.length === 0 && <option value={caseId}>{scenario?.case.label ?? caseId}</option>}
-              {cases.map((c) => (
-                <option key={c.id} value={c.id}>{c.label}</option>
-              ))}
-            </select>
-          </label>
+          {/* No picker here: the alternate cases live under "Why trust this?". This only says when one is loaded. */}
+          {alternate && (
+            <span className="pill pill-warn" title="An alternate case is loaded in place of the main network">
+              Alternate case: {alternate}
+              <button type="button" className="link" onClick={() => changeCase(mainCaseId)}>Back to the main network</button>
+            </span>
+          )}
+          {changedAssumptions.length > 0 && (
+            <span className="pill pill-warn" title={`Every figure on screen uses changed assumptions: ${changedAssumptions.join(", ")}`}>
+              Assumptions changed
+              <button type="button" className="link" onClick={() => setEvidenceOpen(true, "assumptions")}>Review</button>
+              <button type="button" className="link" onClick={resetOverrides}>Reset</button>
+            </span>
+          )}
           <button type="button" className="btn btn-small" onClick={() => setEvidenceOpen(true)}>Why trust this?</button>
           {USE_MOCK && <span className="pill pill-mock" title="VITE_USE_MOCK=1: responses come from src/api/mock.ts, not the optimizer">Mock data</span>}
         </div>
@@ -94,7 +139,13 @@ export function App() {
 
       {ready && <TallyBar />}
 
-      <main ref={mainRef} className={`main ${solving && ready ? "is-stale" : ""}`}>
+      <main
+        ref={mainRef}
+        className={`main ${solving && ready ? "is-stale" : ""}`}
+        onScroll={(e) => {
+          if (shown.current === "decisions") queueScroll.current = e.currentTarget.scrollTop;
+        }}
+      >
         {error && <ErrorPanel compact={ready} />}
         {!ready && !error && (
           <div className="card loading-card">
@@ -116,6 +167,7 @@ export function App() {
       </main>
 
       <EvidenceDrawer />
+      <CaseSwitchDialog />
     </div>
   );
 }

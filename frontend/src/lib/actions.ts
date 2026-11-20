@@ -51,3 +51,23 @@ export function refusalEffect(
       return `Rejecting means no return incentive is offered at ${branchName(a.branch_id)} this week.`;
   }
 }
+
+/** The order decisions fall due: pricing changes (effective today), then moves by dispatch day. */
+export function dueOrder(actions: Action[]): Action[] {
+  const pricing = actions.filter((a) => a.type !== "move");
+  const moves = actions.filter((a) => a.type === "move").sort((a, b) => (a.dispatch_day ?? 1) - (b.dispatch_day ?? 1));
+  return [...pricing, ...moves];
+}
+
+/** Two moves share a lane when a rejection of one closes it for the other: same origin, destination and class. */
+export function sameLane(a: Action, b: Action): boolean {
+  return a.type === "move" && b.type === "move" && a.origin === b.origin && a.dest === b.dest && a.class_id === b.class_id;
+}
+
+/**
+ * A close call: refusing would lose something, but little, either in absolute terms or
+ * against what the action costs to carry out.
+ */
+export function isCloseCall(reduction: number, costToCarryOut: number): boolean {
+  return reduction > 0.5 && reduction <= Math.max(50, 0.1 * costToCarryOut);
+}

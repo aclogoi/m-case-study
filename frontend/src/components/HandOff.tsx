@@ -4,6 +4,7 @@ import { MODE_LABEL } from "../lib/actions";
 import { num, signedPct, signedUsd, usd } from "../lib/format";
 import { tallyOf } from "../lib/tally";
 import { useDecisions, useLookups, useSoured, useStore, type Lookups } from "../state/store";
+import { useChangedAssumptions } from "./AssumptionsPanel";
 import { Card } from "./ui";
 
 function pricingRow(a: Action, L: Lookups): { branch: string; appliesTo: string; change: string } {
@@ -43,7 +44,7 @@ function buildSheet(approved: Action[], changeCost: number, branchOrder: string[
   };
 }
 
-function asText(sheet: Sheet, L: Lookups, gain: number, pendingCount: number, warning: string | null): string {
+function asText(sheet: Sheet, L: Lookups, gain: number, pendingCount: number, warning: string | null, changed: string[]): string {
   const lines: string[] = [];
   const year = L.scenario.start_date.slice(0, 4);
   lines.push("FLEET PLAN: APPROVED ACTIONS");
@@ -74,6 +75,7 @@ function asText(sheet: Sheet, L: Lookups, gain: number, pendingCount: number, wa
   if (sheet.changeCosts > 0.5) lines.push(`  Change costs: ${usd(sheet.changeCosts)}`);
   lines.push(`  Gain against doing nothing, 14 days: ${signedUsd(gain)}`);
   if (warning) lines.push(`  Warning: ${warning}`);
+  if (changed.length > 0) lines.push(`  Note: worked out with changed assumptions (${changed.join(", ")}), not the defaults.`);
   if (pendingCount > 0) lines.push(`  Note: ${pendingCount} ${pendingCount === 1 ? "recommendation is" : "recommendations are"} still undecided and not on this sheet.`);
   return lines.join("\n");
 }
@@ -107,6 +109,7 @@ export function HandOff() {
   const L = useLookups();
   const { approvedActions, missing, counts } = useDecisions();
   const soured = useSoured();
+  const changed = useChangedAssumptions();
   const [copied, setCopied] = useState<"yes" | "failed" | null>(null);
   if (!result) return null;
 
@@ -151,7 +154,7 @@ export function HandOff() {
             type="button"
             className="btn"
             onClick={async () => {
-              const ok = await copy(asText(sheet, L, gain, counts.pending, stranded ? strandedText : null));
+              const ok = await copy(asText(sheet, L, gain, counts.pending, stranded ? strandedText : null, changed));
               setCopied(ok ? "yes" : "failed");
               window.setTimeout(() => setCopied(null), 2500);
             }}
@@ -162,6 +165,12 @@ export function HandOff() {
         </div>
       </div>
 
+      {/* Printed too: whoever receives the sheet should know the figures are not on the default assumptions. */}
+      {changed.length > 0 && (
+        <p className="note">
+          This sheet was worked out with changed assumptions ({changed.join(", ")}), not the defaults. Reset the sliders under “Why trust this?” before sending if that was only a what-if.
+        </p>
+      )}
       {counts.pending > 0 && (
         <p className="note no-print">
           {counts.pending} {counts.pending === 1 ? "recommendation is" : "recommendations are"} still undecided and not on this sheet.{" "}
